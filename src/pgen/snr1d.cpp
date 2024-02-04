@@ -71,6 +71,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     EnrollUserBoundaryFunction(BoundaryFace::inner_x1, MyBoundary_ix1);
   }
   EnrollUserExplicitSourceFunction(MySource);
+  //AllocateUserHistoryOutput(1);
+  //EnrollUserHistoryOutput(0, radius, "radius");
   return;
 }
 
@@ -263,3 +265,5 @@ namespace {
     return;
   }
 }
+
+//TODO(@mhguo): add history output: Ehot, Mhot, radius, etc.
