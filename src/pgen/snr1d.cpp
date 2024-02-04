@@ -34,7 +34,9 @@
 #include "../parameter_input.hpp"
 
 namespace {
-  Real mdot, edot;
+  Real rout, rin, pa, da, prat, drat;
+  Real mdot, edot, t_m, t_e;
+  int mdot_flag, edot_flag;
   void SNSource(MeshBlock *pmb, const Real time, const Real dt,
                 const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
                 const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
@@ -52,8 +54,19 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt,
               AthenaArray<Real> &cons_scalar);
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
-  mdot = pin->GetOrAddReal("problem", "mdot",0.0);
-  edot = pin->GetOrAddReal("problem", "edot",0.0);
+  printf("Initializing user mesh data...\n");
+  rout = pin->GetReal("problem", "radius");
+  rin  = rout - pin->GetOrAddReal("problem", "ramp", 0.0);
+  pa   = pin->GetOrAddReal("problem", "pamb", 1.0);
+  da   = pin->GetOrAddReal("problem", "damb", 1.0);
+  prat = pin->GetReal("problem", "prat");
+  drat = pin->GetOrAddReal("problem", "drat", 1.0);
+  mdot = pin->GetOrAddReal("problem", "mdot", 0.0);
+  edot = pin->GetOrAddReal("problem", "edot", 0.0);
+  t_m  = pin->GetOrAddReal("problem", "t_m",  0.0);
+  t_e  = pin->GetOrAddReal("problem", "t_e",  0.0);
+  mdot_flag = pin->GetOrAddInteger("problem", "mdot_flag", 0);
+  edot_flag = pin->GetOrAddInteger("problem", "edot_flag", 0);
   if (pin->GetString("mesh", "ix1_bc") == "user") {
     EnrollUserBoundaryFunction(BoundaryFace::inner_x1, MyBoundary_ix1);
   }
@@ -192,14 +205,57 @@ namespace {
                 const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
                 AthenaArray<Real> &cons_scalar) {
     Real g = pmb->peos->GetGamma();
+    Real epsilon = 1.15167;
+    Real K = 1.527096;
+    Real energy = 4.0/3.0*M_PI*rout*rout*rout*pa*prat/(g-1.0);; 
+    Real r_st = epsilon*std::pow(energy,0.2)*std::pow(da,-0.2)*std::pow(time,0.4);
+    Real v_st = 0.4*epsilon*std::pow(energy,0.2)*std::pow(da,-0.2)*std::pow(time,-0.6);
+    Real p_st = K*energy/std::pow(r_st,3.0)/2.0/M_PI;
+    //std::cout << "r_st=" << r_st << " v_st=" << v_st << " p_st=" << p_st << std::endl;
+    Real mdot_st = 3.0*da*v_st/r_st;
+    Real edot_st = 3.0*da*v_st*v_st*v_st/r_st;
+    auto pcoord = pmb->pcoord;
     for (int k = pmb->ks; k <= pmb->ke; ++k) {
       for (int j = pmb->js; j <= pmb->je; ++j) {
         for (int i = pmb->is; i <= pmb->ie; ++i) {
           Real temp = prim(IPR,k,j,i) / prim(IDN,k,j,i);
-          if (std::abs(prim(IVX,k,j,i))>1e-5) {
+          if (std::abs(prim(IVX,k,j,i))>1e-4) {
+            Real rad;
+            if (std::strcmp(COORDINATE_SYSTEM, "cartesian") == 0) {
+              Real x = pcoord->x1v(i);
+              Real y = pcoord->x2v(j);
+              Real z = pcoord->x3v(k);
+              rad = std::sqrt(SQR(x) + SQR(y) + SQR(z));
+            } else if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
+              Real x = pcoord->x1v(i)*std::cos(pcoord->x2v(j));
+              Real y = pcoord->x1v(i)*std::sin(pcoord->x2v(j));
+              Real z = pcoord->x3v(k);
+              rad = std::sqrt(SQR(x) + SQR(y) + SQR(z));
+            } else { // if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0)
+              Real x = pcoord->x1v(i)*std::sin(pcoord->x2v(j))*std::cos(pcoord->x3v(k));
+              Real y = pcoord->x1v(i)*std::sin(pcoord->x2v(j))*std::sin(pcoord->x3v(k));
+              Real z = pcoord->x1v(i)*std::cos(pcoord->x2v(j));
+              rad = std::sqrt(SQR(x) + SQR(y) + SQR(z));
+            }
+
             //std::cout << i << std::endl;
-            cons(IDN,k,j,i) += dt * mdot * prim(IPR,k,j,i);
-            cons(IEN,k,j,i) += dt * edot * prim(IPR,k,j,i);
+            if (time > t_m) {
+              if (mdot_flag==0) {
+                cons(IDN,k,j,i) += dt * mdot * pow(prim(IPR,k,j,i),5.0/6.0) * 1.8616894573743115;
+              } else {
+                //cons(IDN,k,j,i) += dt * mdot * mdot_st;
+                //cons(IDN,k,j,i) += dt * mdot * mdot_st * rad/r_st; // (rad/r_st-0.5);// * prim(IDN,k,j,i) / 4.0 / da ;;
+                cons(IDN,k,j,i) += dt * mdot * mdot_st  * pow(prim(IPR,k,j,i) / p_st, 5.0/6.0);
+              }
+            }
+            if (time > t_e) {
+              if (edot_flag==0) {
+                cons(IEN,k,j,i) += dt * edot * pow(time,-11.0/5.0) * 1.7787463061055937;
+              } else {
+                cons(IEN,k,j,i) += dt * edot * edot_st; // * prim(IPR,k,j,i) / p_st;
+              }
+              
+            }
           }
         }
       }
